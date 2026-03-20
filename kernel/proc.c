@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+	p->nice = 20;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -688,3 +689,105 @@ procdump(void)
     printf("\n");
   }
 }
+
+int getnice(int pid)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+
+    if(p->pid == pid){
+      int v = p->nice;
+      release(&p->lock);
+      return v;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+int
+setnice(int pid, int value)
+{
+  if(value < 0 || value > 39)
+    return -1;
+  
+  struct proc *p;
+  for(p=proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      p->nice = value;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+void ps(int pid)
+{
+  static char* states[] = {
+    "UNUSED  ",
+    "EMBRYO  ", 
+    "SLEEPING", 
+    "RUNNABLE", 
+    "RUNNING ", 
+    "ZOMBIE  "
+  };
+  
+  struct proc *p;
+  int valid_pid = 0;
+  
+  for(p = proc; p < &proc[NPROC]; p++)
+    if(p->pid == pid) valid_pid = 1;
+    
+  if(!pid) valid_pid = 1;
+  
+  if(!valid_pid){
+    return;
+  }
+  
+  printf("name\tpid\tstate\tpriority\n");
+  
+  for(p = proc; p < &proc[NPROC]; p++){
+    if((!pid || p->pid == pid) && p->state)
+      printf("%s\t%d\t%s\t%d\n", p->name, p->pid, states[p->state], p->nice);
+  }
+  
+  return;
+}
+
+int
+waitpid(int pid){
+  struct proc *p;
+  struct proc *mp = myproc();
+  
+  acquire(&wait_lock);
+  for(;;){
+    int found = 0;
+    
+    for(p = proc; p < &proc[NPROC]; p++){
+      if(p->parent == mp && p->pid == pid){
+        found = 1;
+        
+        acquire(&p->lock); //이프문에 안들어가면 오버헤드 발생
+        if(p->state == ZOMBIE){
+          freeproc(p);
+          release(&p->lock);
+          release(&wait_lock);
+          return 0;
+        }
+        release(&p->lock);
+      }
+    }
+    
+    if(!found || mp->killed){
+      release(&wait_lock);
+      return -1;
+    }
+    
+    sleep(mp, &wait_lock);
+  }
+}
+
