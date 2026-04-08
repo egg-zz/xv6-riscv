@@ -188,3 +188,7 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+//for PA2 EEVDF
+#define MAX_INT 2147483647
+#define BASE_SLICE 5000
