@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "defs.h"
 
 uint64
 sys_exit(void)
@@ -157,4 +158,38 @@ sys_waitpid(void)
   argint(0, &pid);
 
   return waitpid(pid);
+}
+
+uint64 
+sys_mmap(void)
+{
+  uint64 addr;
+  int length;
+  int prot;
+  int flags;
+  int fd;
+  int offset;
+
+  argaddr(0, &addr);
+  argint(1, &length);
+  argint(2,&prot);
+  argint(3,&flags);
+  argint(4,&fd);
+  argint(5,&offset); 
+
+  return mmap(addr,length,prot,flags,fd,offset);
+}
+
+uint64
+sys_munmap(void)
+{
+  uint64 addr;
+  argaddr(0,&addr);
+  return munmap(addr);
+}
+
+uint64
+sys_freemem(void)
+{
+  return freemem();
 }

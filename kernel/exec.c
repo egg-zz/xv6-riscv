@@ -81,6 +81,8 @@ kexec(char *path, char **argv)
   p = myproc();
   uint64 oldsz = p->sz;
 
+	unmap_proc_mmaps(p);
+
   // Allocate some pages at the next page boundary.
   // Make the first inaccessible as a stack guard.
   // Use the rest as the user stack.

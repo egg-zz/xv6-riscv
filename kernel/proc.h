@@ -111,6 +111,17 @@ struct proc {
   int vdeadline;               // Virtual deadline (EEVDF scheduling)
 };
 
+//struct for from PA3
+struct mmap_area{
+  struct file *f;
+  uint64 addr;
+  int length;//if length == 0, mmap_area is not used
+  int offset;
+  int prot;
+  int flags;
+  struct proc *p;
+};
+
 extern int weight_table[40];
 extern struct proc proc[NPROC];
 extern int avg_vruntime;

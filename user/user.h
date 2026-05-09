@@ -29,6 +29,9 @@ int setnice(int, int);
 void ps(int);
 uint64 meminfo(void);
 int waitpid(int);
+uint64 mmap(uint64, int, int, int, int, int);
+int munmap(uint64);
+int freemem(void);
 
 // ulib.c
 int stat(const char*, struct stat*);

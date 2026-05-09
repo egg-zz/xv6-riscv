@@ -5,8 +5,10 @@
 #include "riscv.h"
 #include "defs.h"
 #include "spinlock.h"
-#include "proc.h"
+#include "sleeplock.h"
 #include "fs.h"
+#include "file.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -147,6 +149,7 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 {
   uint64 a, last;
   pte_t *pte;
+	void *ra = __builtin_return_address(0);
 
   if((va % PGSIZE) != 0)
     panic("mappages: va not aligned");
@@ -162,8 +165,10 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
   for(;;){
     if((pte = walk(pagetable, a, 1)) == 0)
       return -1;
-    if(*pte & PTE_V)
-      panic("mappages: remap");
+    if(*pte & PTE_V){
+    	printf("mappages: remap va=0x%ld pte=0x%lx caller_ra=%p\n", a, *pte, ra);
+		  panic("mappages: remap");
+		}
     *pte = PA2PTE(pa) | perm | PTE_V;
     if(a == last)
       break;
@@ -216,16 +221,20 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 uint64
 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz, int xperm)
 {
-  char *mem;
-  uint64 a;
-
   if(newsz < oldsz)
     return oldsz;
 
-  oldsz = PGROUNDUP(oldsz);
-  for(a = oldsz; a < newsz; a += PGSIZE){
-    mem = kalloc();
-    if(mem == 0){
+  uint64 start = PGROUNDUP(oldsz);
+  for (uint64 a = start; a < newsz; a += PGSIZE) {
+    // 이미 매핑된 페이지는 절대 다시 매핑하지 않는다 (remap 방지)
+    pte_t *pte = walk(pagetable, a, 0);
+    if (pte && (*pte & PTE_V)) {
+      // 필요하면 로그 유지
+      // printf("[uvmalloc] skip already-mapped a=0x%p pte=0x%lx (oldsz=0x%p newsz=0x%p)\n", (void*)a, *pte, (void*)oldsz, (void*)newsz);
+      continue;
+    }
+    char *mem = kalloc();
+    if (mem == 0) {
       uvmdealloc(pagetable, a, oldsz);
       return 0;
     }
@@ -445,31 +454,60 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   }
 }
 
+extern int vmfault_mmap(pagetable_t pt, uint64 fault_va, int read);
+
 // allocate and map user memory if process is referencing a page
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
 // out of physical memory, and physical address if successful.
 uint64
-vmfault(pagetable_t pagetable, uint64 va, int read)
+vmfault(pagetable_t pagetable, uint64 fault_va, int read)
 {
-  uint64 mem;
   struct proc *p = myproc();
+	uint64 va = PGROUNDDOWN(fault_va);
+
+	// 0) check if its already mapped
+  uint64 pa = walkaddr(pagetable,va);
+  if (pa != 0)
+    return pa;
+
+  if(is_guard_page(pagetable, va))
+    return 0;
+
+  // 1) search from mmap area
+  if(vmfault_mmap(pagetable, fault_va, read) == 1) return walkaddr(pagetable,va);
+
+  // 2) If not within mmap region, fall back to the original lazy zero-page logic
+  // only handle addresses below p->sz as before
 
   if (va >= p->sz)
     return 0;
-  va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
+
+  char *mem = kalloc();
+  if (mem == 0)
+    return 0;
+  memset(mem, 0, PGSIZE);
+
+  if (mappages(pagetable, va, PGSIZE, (uint64)mem, PTE_U | PTE_R | PTE_W) != 0) {
+    kfree(mem);
     return 0;
   }
-  mem = (uint64) kalloc();
-  if(mem == 0)
+
+  return (uint64)mem;
+}
+
+int
+is_guard_page(pagetable_t pagetable, uint64 va)
+{
+  if(va >= MAXVA)
     return 0;
-  memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
-    kfree((void *)mem);
-    return 0;
-  }
-  return mem;
+  
+	pte_t *pte = walk(pagetable, va, 0);
+  
+	if(pte == 0)
+		return 0;
+
+  return (*pte & PTE_V) && ((*pte & PTE_U) == 0);
 }
 
 int
