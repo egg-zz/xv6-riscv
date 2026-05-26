@@ -6,6 +6,13 @@
 #include "defs.h"
 #include "fs.h"
 
+int swap_in(pagetable_t pagetable, uint64 va);
+
+extern void lru_add(struct page *p);
+extern void lru_remove(struct page *p);
+extern struct page* pa2page(uint64);
+extern void swap_free_slot(int);
+
 /*
  * the kernel's page table.
  */
@@ -114,9 +121,15 @@ walkaddr(pagetable_t pagetable, uint64 va)
   if(va >= MAXVA)
     return 0;
 
+retry:
   pte = walk(pagetable, va, 0);
   if(pte == 0)
     return 0;
+	if((*pte & PTE_S)){
+    if(swap_in(pagetable, PGROUNDDOWN(va)) < 0)
+      return 0;
+    goto retry;
+  }
   if((*pte & PTE_V) == 0)
     return 0;
   if((*pte & PTE_U) == 0)
@@ -163,7 +176,15 @@ mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
     if(*pte & PTE_V)
       panic("mappages: remap");
     *pte = PA2PTE(pa) | perm | PTE_V;
-    if(a == last)
+    
+		if(perm & PTE_U){
+      struct page *pg = pa2page(pa);
+      pg->pagetable = pagetable;
+      pg->vaddr = (char*)PGROUNDDOWN(a);
+      lru_add(pg);
+    }
+
+		if(a == last)
       break;
     a += PGSIZE;
     pa += PGSIZE;
@@ -186,12 +207,18 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
   for(a = va; a < va + npages*PGSIZE; a += PGSIZE){
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
-    if((*pte & PTE_V) == 0)
+    if((*pte & PTE_V) == 0 && (*pte & PTE_S) == 0 )
       panic("uvmunmap: not mapped");
-    if(PTE_FLAGS(*pte) == PTE_V)
-      panic("uvmunmap: not a leaf");
+		if(*pte & PTE_S){
+      uint64 slot_pa = PTE2PA(*pte);
+      int slot = slot_pa / PGSIZE;
+      swap_free_slot(slot);
+      *pte = 0;
+      continue;
+    }
     if(do_free){
       uint64 pa = PTE2PA(*pte);
+			lru_remove(pa2page(pa)); //remove from LRU
       kfree((void*)pa);
     }
     *pte = 0;
@@ -303,6 +330,43 @@ uvmfree(pagetable_t pagetable, uint64 sz)
   freewalk(pagetable);
 }
 
+int
+swap_in(pagetable_t pagetable, uint64 va)
+{
+  printf("swap_in: va=0x%ld\n", va);
+  pte_t *pte = walk(pagetable, va, 0);
+  if (pte == 0)
+    return -1;
+  if ((*pte & PTE_S) == 0)
+    return -1;   // 스왑 상태가 아님
+
+  // PTE에 인코딩되어 있던 slot 번호 복원
+  uint64 slot_pa = PTE2PA(*pte);
+  int slot = slot_pa / PGSIZE;
+
+  // 새 물리 페이지 할당
+  char *mem = kalloc();
+  if (mem == 0)
+    return -1;
+
+  // 디스크 → 새로 할당한 커널 페이지로 읽기
+  swapread((uint64)mem, slot);
+  swap_free_slot(slot);
+
+  uint64 flags = PTE_FLAGS(*pte);
+  flags &= ~PTE_S;
+  flags |= PTE_V;
+
+  *pte = PA2PTE((uint64)mem) | flags;
+
+  struct page *pg = pa2page((uint64)mem);
+  pg->pagetable = pagetable;
+  pg->vaddr = (char*)PGROUNDDOWN(va);
+  lru_add(pg);
+
+  return 0;
+}
+
 // Given a parent process's page table, copy
 // its memory into a child's page table.
 // Copies both the page table and the
@@ -320,7 +384,13 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
+    // retore first if it's swapped-out page
+    if(*pte & PTE_S){
+      if(swap_in(old, i) < 0)
+        goto err;
+      pte = walk(old, i, 0);
+    }
+		if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
@@ -366,6 +436,17 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     if(va0 >= MAXVA)
       return -1;
     pte = walk(pagetable, va0, 0);
+		
+		if(!pte) return -1;
+
+    if(*pte & PTE_S){
+      if(swap_in(pagetable, va0) < 0)
+        return -1;
+      pte = walk(pagetable, va0, 0);
+      if(pte == 0)
+        return -1;
+    }
+
     if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
        (*pte & PTE_W) == 0)
       return -1;

@@ -6,6 +6,9 @@
 
 volatile static int started = 0;
 
+extern void lru_init(void);
+extern void swapinit(void);
+
 // start() jumps here in supervisor mode on all CPUs.
 void
 main()
@@ -17,6 +20,8 @@ main()
     printf("xv6 kernel is booting\n");
     printf("\n");
     kinit();         // physical page allocator
+		lru_init();      // initialize LRU list
+    swapinit();      // initialize swap bitmap
     kvminit();       // create kernel page table
     kvminithart();   // turn on paging
     procinit();      // process table

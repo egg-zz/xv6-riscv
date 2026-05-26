@@ -503,3 +503,47 @@ sys_pipe(void)
   }
   return 0;
 }
+
+// pa4: swap functions sysfile
+uint64 
+sys_swapread(void)
+{
+    uint64 ptr;
+    int blkno;
+
+    argaddr(0, &ptr);
+    argint(1, &blkno);
+
+    swapread(ptr, blkno);
+    return 0;  // swapread는 void이므로 성공 시 0 반환
+}
+
+uint64 
+sys_swapwrite(void)
+{
+    uint64 ptr;
+    int blkno;
+
+    argaddr(0, &ptr);
+    argint(1, &blkno);
+
+    swapwrite(ptr, blkno);
+    return 0;  // swapwrite도 마찬가지로 0 반환
+}
+
+uint64
+sys_swapstat(void)
+{
+  uint64 user_nr_read_ptr;
+  uint64 user_nr_write_ptr;
+  struct proc *p = myproc();
+
+  argaddr(0, &user_nr_read_ptr);
+  argaddr(1, &user_nr_write_ptr);
+
+  if (copyout(p->pagetable, user_nr_read_ptr, (char*)&nr_sectors_read, sizeof(int)) < 0 ||
+  copyout(p->pagetable, user_nr_write_ptr, (char *)&nr_sectors_write, sizeof(int)) < 0)
+    return -1;
+
+  return 0;
+}
